@@ -12,6 +12,10 @@ from langgraph.graph import StateGraph, END
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # ---------- LangGraph state ----------
 
 class InsightState(TypedDict, total=False):
@@ -46,7 +50,8 @@ class MCPToolPlan(BaseModel):
 
 # ---------- LLM + MCP client ----------
 
-llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.0)
+# llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.0)
+llm = ChatOpenAI()
 
 mcp_client = MultiServerMCPClient(
     {
@@ -142,6 +147,52 @@ def execute_dynatrace_plan(state: InsightState) -> InsightState:
         "dynatrace_raw": result,
         "dynatrace_df": df,
     }
+
+def plan_elk_query(state: InsightState) -> InsightState:
+    params = state["params"]
+    bad_vm_ids = (
+        state.get("dynatrace_df", pd.DataFrame())
+            .get("dt.entity.cloud_vm", pd.Series(dtype=str))
+            .dropna()
+            .unique()
+            .tolist()
+    )
+
+    prompt = f"""
+    You are an ELK (Elasticsearch) query planner.
+
+    We have identified some VMs with potential high memory problems:
+    {bad_vm_ids}
+
+    We want to fetch related incident tickets from an index called
+    'incident_tickets*' over the last {params.get('lookback_days', 30)} days.
+
+    The ELK MCP exposes an Elasticsearch query tool that accepts:
+    - body: an Elasticsearch JSON query.
+
+    You MUST:
+    - Set server = "elk".
+    - Set tool_name to the ELK tool that executes a JSON query
+      (for now, set it to "execute_query" – you can adjust later).
+    - Set args.body as a valid Elasticsearch query that:
+        * filters tickets where vm_id is in the above list (if any),
+        * limits to last N days.
+
+    If there are no bad_vm_ids, still generate a simple time-filter query.
+
+    Return the MCPToolPlan ONLY.
+    """
+    plan: MCPToolPlan = planner_llm.invoke(prompt)
+    return {"elk_plan": plan.dict()}
+
+
+def execute_elk_plan(state: InsightState) -> InsightState:
+    if "elk_plan" not in state:
+        return {}
+
+    plan = MCPToolPlan(**state["elk_plan"])
+    result = asyncio.run(_execute_plan(plan))
+    return {"elk_raw": result}
 
 def compute_insight(state: InsightState) -> InsightState:
     df = state["dynatrace_df"].copy()

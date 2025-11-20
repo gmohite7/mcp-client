@@ -10,41 +10,46 @@ from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 
-# ─────────────────────────────
-# MCP servers: local math via uv + fastmcp
-# ─────────────────────────────
-SERVERS = { 
-    # "math": {
-    #     "transport": "stdio",
-    #     "command": "/Library/Frameworks/Python.framework/Versions/3.11/bin/uv",
-    #     "args": [
-    #         "run",
-    #         "fastmcp",
-    #         "run",
-    #         "/Users/nitish/Desktop/mcp-math-server/main.py"
-    #    ]
-    # },
-    "expense": {
-        "transport": "streamable_http",  # if this fails, try "sse"
-        "url": "https://occupational-beige-bird.fastmcp.app/mcp"
-    },
-    "manim-server": {
-        "transport": "stdio",
-        "command": "/Users/girishmohite/gmohite7/.venv/bin/python3",
-        "args": [
-        "/Users/girishmohite/gmohite7/manim-mcp-server/src/manim_server.py"
-      ],
-        "env": {
-        "MANIM_EXECUTABLE":"/usr/local/bin/manim"
-      }
-    }
-}
 
 
-SYSTEM_PROMPT = (
-    "You have access to tools. When you choose to call a tool, do not narrate status updates. "
-    "After tools run, return only a concise final answer."
-)
+
+# SYSTEM_PROMPT = (
+#     "You have access to tools. When you choose to call a tool, do not narrate status updates. "
+#     "After tools run, return only a concise final answer."
+# )
+
+SYSTEM_PROMPT = """
+You are an operator assistant with access to multiple MCP tools.
+
+IMPORTANT RULES:
+
+1. When the user asks anything about Dynatrace data (metrics or logs),
+   you MUST use the Dynatrace MCP tool called 'execute_dql'
+   (or whichever Dynatrace tool you see listed that runs DQL).
+
+2. That tool has an argument like:
+     { "dqlStatement": "<Dynatrace DQL string>" }
+
+   You must write the DQL yourself based on the user's natural language.
+   There is NO separate "generate DQL" tool. You are the one generating the DQL.
+
+3. Example pattern for logs:
+   - Fetch 2 ERROR logs in the last day:
+
+     dqlStatement:
+     \"\"\"
+     fetch logs
+     | filter loglevel == "ERROR"
+     | filter timestamp >= now() - 1d
+     | limit 2
+     \"\"\"
+
+4. When you choose to call a tool, do NOT narrate "I am calling a tool".
+   Just return a tool call. After tools run, respond with a concise final answer
+   explaining what you found.
+
+5. If the user does NOT ask for Dynatrace, use other tools or answer directly.
+"""
 
 st.set_page_config(page_title="MCP Chat", page_icon="🧰", layout="centered")
 st.title("🧰 MCP Chat")
@@ -114,6 +119,7 @@ if user_text:
                 except Exception:
                     pass
             tool = st.session_state.tool_by_name[name]
+            print(f"Invoking tool {name} with args: {args}")
             res = asyncio.run(tool.ainvoke(args))
             tool_msgs.append(ToolMessage(tool_call_id=tc["id"], content=json.dumps(res)))
 
